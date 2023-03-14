@@ -1,11 +1,56 @@
 const mercadoPagoPublicKey = document.getElementById("mercado-pago-public-key").value;
 const mercadopago = new MercadoPago(mercadoPagoPublicKey);
 
+window.addEventListener('load', function() {
+    var input = document.querySelector('#user_whatsapp');
+    window.intlTelInput(input, {
+      separateDialCode: true,
+      initialCountry: "mx",
+      preferredCountries: ["mx", "us", "pe", "es", "co", "ar", "cl"],
+    });
+  });
+
+  async function getPhonecontinueSelectNumber(){
+    let phoneInput = document.getElementById("user_whatsapp");
+    let countryCode = document.querySelector('.iti__selected-dial-code').innerHTML;
+    let phoneNumber = countryCode.replace(/[^0-9]/g,'') + phoneInput.value.replace(/[^0-9]/g,'');
+    return phoneNumber;
+  }
+
 function loadCardForm() {
     const productCost = document.getElementById('amount').value;
     const productDescription = document.getElementById('product-description').innerText;
     const payButton = document.getElementById("form-checkout__submit");
     const validationErrorMessages= document.getElementById('validation-error-messages');
+
+    //funcion para enviar la fecha de hoy al enviar el post para hacer la suscripción
+    async function getDateTime() {
+        var today = new Date();
+        var year = today.getFullYear();
+        var month = (today.getMonth() + 1).toString().padStart(2, '0');
+        var day = today.getDate().toString().padStart(2, '0');
+        var hour = today.getHours().toString().padStart(2, '0');
+        var minute = today.getMinutes().toString().padStart(2, '0');
+        var second = today.getSeconds().toString().padStart(2, '0');
+        var millisecond = today.getMilliseconds().toString().padStart(3, '0');
+      
+        return `${year}-${month}-${day}T${hour}:${minute}:${second}.${millisecond}Z`;
+      }
+      //funcion para obtener la fecha en que termina el plan (1 mes después de que se crea la suscripción)
+
+    async function getDateTimeMonthFromNow() {
+        var today = new Date();
+        var year = today.getFullYear();
+        var month = (today.getMonth() + 2).toString().padStart(2, '0'); // added 1 to month
+        var day = today.getDate().toString().padStart(2, '0');
+        var hour = today.getHours().toString().padStart(2, '0');
+        var minute = today.getMinutes().toString().padStart(2, '0');
+        var second = today.getSeconds().toString().padStart(2, '0');
+        var millisecond = today.getMilliseconds().toString().padStart(3, '0');
+    
+        return `${year}-${month}-${day}T${hour}:${minute}:${second}.${millisecond}Z`;
+    }
+
 
     const form = {
         id: "form-checkout",
@@ -42,13 +87,6 @@ function loadCardForm() {
             id: "form-checkout__installments",
             placeholder: "Installments",
         },
-        identificationType: {
-            id: "form-checkout__identificationType",
-        },
-        identificationNumber: {
-            id: "form-checkout__identificationNumber",
-            placeholder: "Identification number",
-        },
         issuer: {
             id: "form-checkout__issuer",
             placeholder: "Issuer",
@@ -56,7 +94,7 @@ function loadCardForm() {
     };
 
     const cardForm = mercadopago.cardForm({
-        amount: productCost,
+        amount: "127.0",
         iframe: true,
         form,
         callbacks: {
@@ -65,7 +103,7 @@ function loadCardForm() {
                     return console.warn("Form Mounted handling error: ", error);
                 console.log("Form mounted");
             },
-            onSubmit: event => {
+            onSubmit: async event => {
                 event.preventDefault();
                 document.getElementById("loading-message").style.display = "block";
 
@@ -76,8 +114,6 @@ function loadCardForm() {
                     amount,
                     token,
                     installments,
-                    identificationNumber,
-                    identificationType,
                 } = cardForm.getCardFormData();
 
                 fetch("/process_payment", {
@@ -92,12 +128,9 @@ function loadCardForm() {
                         transactionAmount: Number(amount),
                         installments: Number(installments),
                         description: productDescription,
+                        external_reference: await getPhonecontinueSelectNumber(),
                         payer: {
-                            email,
-                            identification: {
-                                type: identificationType,
-                                number: identificationNumber,
-                            },
+                            email
                         },
                     }),
                 })
@@ -106,6 +139,7 @@ function loadCardForm() {
                     })
                     .then(result => {
                         if(!result.hasOwnProperty("error_message")) {
+                            //obtenemos el 
                             document.getElementById("success-response").style.display = "block";
                             document.getElementById("payment-id").innerText = result.id;
                             document.getElementById("payment-status").innerText = result.status;
@@ -129,12 +163,49 @@ function loadCardForm() {
                     payButton.removeAttribute("disabled");
                 };
             },
-            onCardTokenReceived: (errorData, token) => {
+            onCardTokenReceived: async (errorData, token)  => {
                 if (errorData && errorData.error.fieldErrors.length !== 0) {
                     errorData.error.fieldErrors.forEach(errorMessage => {
                         alert(errorMessage);
                     });
                 }
+                //obtener fechas de suscripcion
+                var today = await getDateTime();
+                var monthFromNow = await getDateTimeMonthFromNow();
+                //creamos la subscripcion con ese token 
+                fetch("/preapproval", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": "Bearer [MERCADO PAGO ACCESS TOKEN]"
+                    },
+                    body: JSON.stringify({
+                        preapproval_plan_id: "2c93808486c6a9e80186c9d9b5fb01c8",
+                        reason: "ChatGPT in Whatsapp - Plan ilimitado",
+                        payer_email: document.getElementById("form-checkout__cardholderEmail").value,
+                        card_token_id: token["token"], //aquí estamos enviando el token que llegó del pago
+                        auto_recurring: {
+                            frequency: 1,
+                            frequency_type:"months",
+                            start_date: today,
+                            end_date: monthFromNow,
+                            transaction_amount: 127.00,
+                            currency_id: "MXN"
+                        },
+                        back_url: "https://wa.link/t6pvm6",
+                        status: "authorized"
+                    
+                    }),
+                })
+                .then(response => {
+                    return response.json();
+                })
+                .then(result => {
+                    console.log(result)
+                })
+                .catch(error => {
+                    alert("Unexpected error\n"+JSON.stringify(error));
+                });
 
                 return token;
             },
@@ -195,7 +266,7 @@ document.getElementById('go-back').addEventListener('click', function(){
 
 // Handle price update
 function updatePrice(){
-    let quantity = document.getElementById('quantity').value;
+    let quantity = document.getElementById('quantity').innerHTML;
     let unitPrice = document.getElementById('unit-price').innerText;
     let amount = parseInt(unitPrice) * parseInt(quantity);
 

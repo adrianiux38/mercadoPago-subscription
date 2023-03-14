@@ -2,6 +2,8 @@ const open = require("open");
 const path = require("path");
 const express = require("express");
 const mercadopago = require("mercadopago");
+var request = require("request");
+const mysql = require("mysql")
 
 const mercadoPagoPublicKey = process.env.MERCADO_PAGO_SAMPLE_PUBLIC_KEY;
 if (!mercadoPagoPublicKey) {
@@ -31,7 +33,48 @@ app.get("/", function (req, res) {
   res.status(200).render("index", { mercadoPagoPublicKey });
 }); 
 
+
+app.post("/preapproval", (req, res) => {
+
+  var options = {
+    method: 'POST',
+    url: 'https://api.mercadopago.com/preapproval',
+    headers: {
+      'Authorization': 'Bearer [MERCADO PAGO ACCESS TOKEN]',
+      'Content-Type': 'application/json'
+    },
+    body: {
+      preapproval_plan_id: req.body["preapproval_plan_id"],
+      reason: req.body["reason"],
+      payer_email: req.body["payer_email"],
+      card_token_id: req.body["card_token_id"],
+      auto_recurring: {
+        frequency: req.body["auto_recurring"]["frequency"],
+        frequency_type: req.body["auto_recurring"]["frequency_type"],
+        start_date: req.body["auto_recurring"]["start_date"],
+        end_date: req.body["auto_recurring"]["end_date"],
+        transaction_amount: req.body["auto_recurring"]["transaction_amount"],
+        currency_id: req.body["auto_recurring"]["currency_id"]
+      },
+      back_url: req.body["back_url"],
+      status: req.body["status"]
+    },
+    json: true
+    
+  };
+  
+  request(options, function (error, response, body) {
+    if (error) throw new Error(error);
+    /*
+    if(!error){
+      console.log(response.body)
+    }*/
+  });
+  res.status(200)
+})
+
 app.post("/process_payment", (req, res) => {
+  
   const { body } = req;
   const { payer } = body;
   const paymentData = {
@@ -43,16 +86,36 @@ app.post("/process_payment", (req, res) => {
     issuer_id: body.issuerId,
     payer: {
       email: payer.email,
-      identification: {
-        type: payer.identification.docType,
-        number: payer.identification.docNumber
-      }
     }
   };
 
   mercadopago.payment.save(paymentData)
     .then(function(response) {
       const { response: data } = response;
+
+      //console.log(response.body)
+
+      const connection = mysql.createConnection({
+        host: '78.138.46.28',
+        user: 'aplicacion',
+        password: '4pl1c4c10N01!',
+        database: 'cobroGptWhats'
+      });
+      connection.connect((err) => {
+        if (err) {
+          console.error('Error connecting: ' + err.stack);
+          return;
+        } 
+        //console.log(response.body)
+          const sql = `INSERT INTO payments(id_pago, whatsapp, metodo_pago, card_name, email, status, status_detail) VALUES ('${response.body["id"]}', '${req.body["external_reference"]}', '${response.body["payment_method_id"]}', '${response.body["card"]["cardholder"]["name"]}', '${req.body["payer"]["email"]}', '${response.body["status"]}', '${response.body["status_detail"]}')`;
+          connection.query(sql, (err, rows) => {
+            if (err) {
+              console.log('Error inserting data into db: ' + err);
+              return;
+            }
+          });
+
+        });
 
       res.status(201).json({
         detail: data.status_detail,
@@ -62,26 +125,22 @@ app.post("/process_payment", (req, res) => {
     })
     .catch(function(error) {
       console.log(error);
-      const { errorMessage, errorStatus }  = validateError(error);
+      //const { errorMessage, errorStatus }  = validateError(error);
       res.status(errorStatus).json({ error_message: errorMessage });
     });
 });
-
+/*
 function validateError(error) {
   let errorMessage = 'Unknown error cause';
   let errorStatus = 400;
 
   if(error.cause) {
-    const sdkErrorMessage = error.cause[0].description;
-    errorMessage = sdkErrorMessage || errorMessage;
-
-    const sdkErrorStatus = error.status;
-    errorStatus = sdkErrorStatus || errorStatus;
+    console.log(error.cause)
   }
 
   return { errorMessage, errorStatus };
 }
-
+*/
 app.listen(8080, () => {
   console.log("The server is now running on port 8080");
   open("http://localhost:8080");
